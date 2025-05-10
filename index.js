@@ -22,12 +22,23 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET // Ensure this is set in your environment variables
 });
 
-// Middleware
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://xaezor-git-main-ajs-projects-ae18b088.vercel.app',
+  process.env.FRONTEND_URL,
+];
+
+// CORS middleware with dynamic origin checking
 app.use(cors({
-  origin: ['https://deceodingayush-github-io.vercel.app', 'http://localhost:3000', 'https://xaezor-two.vercel.app/', 'https://xaezor-git-main-ajs-projects-ae18b088.vercel.app/', 'https://xaezor-hrfnv65t4-ajs-projects-ae18b088.vercel.app/'],
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
-app.use(express.json());
 
 // Connect to MongoDB
 if (mongoURI) {
