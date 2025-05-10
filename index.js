@@ -24,7 +24,7 @@ cloudinary.config({
 
 // Middleware
 app.use(cors({
-  origin: ['https://deceodingayush-github-io.vercel.app', 'http://localhost:3000'],
+  origin: ['https://deceodingayush-github-io.vercel.app', 'http://localhost:3000', 'https://xaezor-two.vercel.app/', 'https://xaezor-git-main-ajs-projects-ae18b088.vercel.app/', 'https://xaezor-hrfnv65t4-ajs-projects-ae18b088.vercel.app/'],
   credentials: true
 }));
 app.use(express.json());
