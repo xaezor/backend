@@ -3,54 +3,42 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const path = require('path');
-const User = require('./models/User');
-const connectDB = require('./db');
+const { v2 as cloudinary } = require('cloudinary');
+const streamifier = require('streamifier'); // To convert buffer to stream for Cloudinary
+const User = require('./models/User'); // Import the User model
+const connectDB = require('./db');     // Import the connectDB function
 
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 5000;
+const mongoURI = process.env.MONGO_URI;
 const jwtSecret = process.env.JWT_SECRET;
 
-// Allowed origins for CORS
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://xaezor-git-main-ajs-projects-ae18b088.vercel.app',
-  process.env.FRONTEND_URL,
-];
+// Configure Cloudinary
+cloudinary.config({ 
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dv4ykvlb6',
+  api_key: process.env.CLOUDINARY_API_KEY || '177374188693799',
+  api_secret: process.env.CLOUDINARY_API_SECRET // Ensure this is set in your environment variables
+});
 
-// CORS middleware with dynamic origin checking
+// Middleware
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: ['https://deceodingayush-github-io.vercel.app', 'http://localhost:3000'],
   credentials: true
 }));
-
-// JSON middleware
 app.use(express.json());
 
-// Static folder for uploaded files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 // Connect to MongoDB
-connectDB(process.env.MONGO_URI);
+if (mongoURI) {
+  connectDB(mongoURI);
+} else {
+  console.error('MONGO_URI environment variable not found. Please create a .env file in the server directory.');
+  process.exit(1);
+}
 
-// Multer setup for profile picture uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'Uploads/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + req.userId + '-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
+// Multer setup for profile pictures (using memory storage instead of disk storage)
+const storage = multer.memoryStorage(); // Store file in memory instead of disk
 
 const fileFilter = (req, file, cb) => {
   if (file.mimetype === 'image/png' || file.mimetype === 'image/jpeg') {
@@ -62,30 +50,35 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 1024 * 1024 * 5 },
+  limits: { fileSize: 1024 * 1024 * 5 }, // 5MB limit
   fileFilter: fileFilter,
 });
 
-// Middleware to authenticate JWT
+// Middleware to extract user ID from token
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) return res.sendStatus(401);
+  console.log('Auth Header:', authHeader);
+  console.log('Token:', token);
+
+  if (token == null) {
+    console.log('No token provided');
+    return res.sendStatus(401);
+  }
 
   jwt.verify(token, jwtSecret, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      console.log('Token verification failed:', err.message);
+      return res.sendStatus(403);
+    }
+    console.log('Token verified, user:', user);
     req.userId = user.userId;
     next();
   });
 };
 
-// Health check
-app.get('/', (req, res) => {
-  res.send('Backend is running');
-});
-
-// Register route
+// API Endpoints
 app.post('/api/register', async (req, res) => {
   const { username, email, password } = req.body;
   try {
@@ -95,13 +88,14 @@ app.post('/api/register', async (req, res) => {
     }
     const newUser = new User({ username, email, password, profilePicture: 'default.png' });
     await newUser.save();
+    console.log('User saved successfully:', newUser.username);
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
+    console.error('Error registering user:', error);
     res.status(500).json({ message: 'Error registering user' });
   }
 });
 
-// Login route
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   
@@ -111,81 +105,112 @@ app.post('/api/login', async (req, res) => {
 
   try {
     const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ message: 'Invalid username' });
+    if (!user) {
+      console.log('Login attempt failed: User not found -', username);
+      return res.status(400).json({ message: 'Invalid username' });
+    }
 
     const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) return res.status(400).json({ message: 'Invalid password' });
+    if (!isPasswordValid) {
+      console.log('Login attempt failed: Invalid password for user -', username);
+      return res.status(400).json({ message: 'Invalid password' });
+    }
 
     const token = jwt.sign({ userId: user._id }, jwtSecret, { expiresIn: '1h' });
-
-    res.json({
-      token,
-      userId: user._id,
+    console.log('Login successful for user:', username);
+    
+    res.json({ 
+      token, 
+      userId: user._id, 
       username: user.username,
-      profilePicture: user.profilePicture
+      profilePicture: user.profilePicture 
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ message: 'An error occurred during login' });
   }
 });
 
-// Get user profile
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.userId).select('-password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     res.json(user);
   } catch (error) {
+    console.error('Error fetching profile:', error);
     res.status(500).json({ message: 'Error fetching profile' });
   }
 });
 
-// Update user profile
-app.put('/api/profile', authenticateToken, upload.single('profilePicture'), async (req, res) => {
+app.patch('/api/profile', authenticateToken, async (req, res) => {
+  console.log('Received PATCH request to /api/profile');
+  console.log('Request body:', req.body);
   try {
-    const updateData = {};
-    
-    if (req.body.bio) {
-      updateData.bio = req.body.bio;
-    }
-
-    if (req.file) {
-      updateData.profilePicture = `/uploads/${req.file.filename}`;
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({ message: 'No updates provided' });
+    const { bio } = req.body;
+    if (!bio) {
+      return res.status(400).json({ message: 'Bio is required' });
     }
 
     const updatedUser = await User.findByIdAndUpdate(
       req.userId,
-      updateData,
+      { bio },
       { new: true, runValidators: true }
     ).select('-password');
 
-    if (!updatedUser) return res.status(404).json({ message: 'User not found' });
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
-    res.json({ message: 'Profile updated successfully', user: updatedUser });
+    res.json({ message: 'Bio updated successfully', user: updatedUser });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating profile', error: error.message });
+    console.error('Error updating bio:', error);
+    res.status(500).json({ message: 'Error updating bio', error: error.message });
   }
 });
 
-// Upload profile picture separately
 app.post('/api/profile/upload', authenticateToken, upload.single('profilePicture'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
 
-    const filename = `/uploads/${req.file.filename}`;
-    await User.findByIdAndUpdate(req.userId, { profilePicture: filename });
+    // Upload the file to Cloudinary using a stream
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'profile_pictures', // Store in a specific folder in Cloudinary
+        public_id: `profilePicture-${req.userId}-${Date.now()}`, // Unique public ID
+        overwrite: true,
+        fetch_format: 'auto', // Optimize format
+        quality: 'auto' // Optimize quality
+      },
+      (error, result) => {
+        if (error) {
+          console.error('Cloudinary upload error:', error);
+          return res.status(500).json({ message: 'Error uploading to Cloudinary', error: error.message });
+        }
 
-    res.json({ message: 'Profile picture uploaded successfully', filename });
+        // Update the user's profile picture with the Cloudinary URL
+        User.findByIdAndUpdate(req.userId, { profilePicture: result.secure_url }, { new: true })
+          .then(() => {
+            res.json({ message: 'Profile picture uploaded successfully', filename: result.secure_url });
+          })
+          .catch((updateError) => {
+            console.error('Error updating user profile picture:', updateError);
+            res.status(500).json({ message: 'Error updating profile picture in database', error: updateError.message });
+          });
+      }
+    );
+
+    // Convert the file buffer to a stream and pipe it to Cloudinary
+    streamifier.createReadStream(req.file.buffer).pipe(uploadStream);
   } catch (error) {
-    res.status(500).json({ message: 'Error uploading profile picture' });
+    console.error('Error uploading profile picture:', error);
+    res.status(500).json({ message: 'Error uploading profile picture', error: error.message });
   }
 });
 
-// Start server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
